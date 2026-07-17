@@ -1,3 +1,4 @@
+# VERSION: 2.0 - separate readable summary and detailed checkpoint
 import argparse
 import json
 import os
@@ -28,10 +29,17 @@ ZERO_SHOT_RESULT_PATH = (
     / "openrouter_zero_shot_eil51.json"
 )
 
-OUTPUT_PATH = (
+SUMMARY_OUTPUT_PATH = (
     PROJECT_ROOT
     / "output"
     / "openrouter_multi_agent_eil51.json"
+)
+
+CHECKPOINT_PATH = (
+    PROJECT_ROOT
+    / "output"
+    / "checkpoints"
+    / "openrouter_multi_agent_eil51_checkpoint.json"
 )
 
 DEFAULT_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
@@ -303,13 +311,119 @@ def extract_scorer_choice(raw_response: str) -> str:
     return choice
 
 
-def save_state(state: dict[str, Any]) -> None:
-    """Deney durumunu checkpoint olarak diske yazar."""
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+def round_optional(value: Any, digits: int = 2) -> float | None:
+    """Sayısal değeri okunabilir biçimde yuvarlar."""
+    if value is None:
+        return None
 
-    OUTPUT_PATH.write_text(
+    return round(float(value), digits)
+
+
+def build_summary(state: dict[str, Any]) -> dict[str, Any]:
+    """Ayrıntılı checkpoint'ten kısa ve okunabilir sonuç üretir."""
+    initial_evaluation = state["initial_evaluation"]
+    final_evaluation = state["current_evaluation"]
+    initial_distance = initial_evaluation.get("distance")
+    final_distance = final_evaluation.get("distance")
+
+    steps: list[dict[str, Any]] = []
+    previous_distance = initial_distance
+
+    for item in state.get("iterations", []):
+        candidate_evaluation = item["critic"]["evaluation"]
+        accepted_evaluation = item["accepted_evaluation"]
+        accepted_distance = accepted_evaluation.get("distance")
+
+        improvement = None
+        if previous_distance is not None and accepted_distance is not None:
+            improvement = previous_distance - accepted_distance
+
+        step = {
+            "iteration": item["iteration"],
+            "candidate": {
+                "valid": candidate_evaluation.get("valid"),
+                "distance": candidate_evaluation.get("distance"),
+                "gap_percent": round_optional(
+                    candidate_evaluation.get("optimality_gap")
+                ),
+            },
+            "scorer": (
+                "skipped"
+                if item["scorer"].get("skipped", False)
+                else item["scorer"].get("parsed_choice")
+            ),
+            "accepted": item["accepted_choice"],
+            "result_distance": accepted_distance,
+            "distance_improvement": improvement,
+        }
+
+        critic_error = (
+            item["critic"].get("call_error")
+            or item["critic"].get("parse_error")
+        )
+        scorer_error = item["scorer"].get("parse_error")
+
+        if critic_error:
+            step["critic_error"] = critic_error
+        if scorer_error:
+            step["scorer_error"] = scorer_error
+
+        steps.append(step)
+        previous_distance = accepted_distance
+
+    total_improvement = None
+    if initial_distance is not None and final_distance is not None:
+        total_improvement = initial_distance - final_distance
+
+    return {
+        "experiment": state["experiment"],
+        "problem": state["problem"],
+        "model": state["model_requested"],
+        "iterations": {
+            "requested": state["requested_iterations"],
+            "completed": state["completed_iterations"],
+        },
+        "api_calls": state["total_api_calls"],
+        "known_optimum": final_evaluation.get("known_optimum"),
+        "initial": {
+            "valid": initial_evaluation.get("valid"),
+            "distance": initial_distance,
+            "gap_percent": round_optional(
+                initial_evaluation.get("optimality_gap")
+            ),
+        },
+        "steps": steps,
+        "final": {
+            "valid": final_evaluation.get("valid"),
+            "distance": final_distance,
+            "gap_percent": round_optional(
+                final_evaluation.get("optimality_gap")
+            ),
+            "distance_improvement": total_improvement,
+            "route": state["current_route"],
+        },
+        "started_at_utc": state.get("timestamp_started_utc"),
+        "updated_at_utc": state.get("timestamp_updated_utc"),
+    }
+
+
+def save_state(state: dict[str, Any]) -> None:
+    """Ayrıntılı checkpoint ve sade sonuç dosyasını kaydeder."""
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SUMMARY_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    CHECKPOINT_PATH.write_text(
         json.dumps(
             state,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    SUMMARY_OUTPUT_PATH.write_text(
+        json.dumps(
+            build_summary(state),
             ensure_ascii=False,
             indent=2,
         ),
@@ -356,10 +470,33 @@ def load_or_create_state(
     resume: bool,
 ) -> dict[str, Any]:
     """Yeni deney başlatır veya checkpoint'ten devam eder."""
-    if resume and OUTPUT_PATH.exists():
-        state = json.loads(
-            OUTPUT_PATH.read_text(encoding="utf-8")
-        )
+    if resume:
+        if CHECKPOINT_PATH.exists():
+            state = json.loads(
+                CHECKPOINT_PATH.read_text(encoding="utf-8")
+            )
+        elif SUMMARY_OUTPUT_PATH.exists():
+            legacy_state = json.loads(
+                SUMMARY_OUTPUT_PATH.read_text(encoding="utf-8")
+            )
+
+            # Önceki sürüm tam checkpoint'i sonuç dosyasına yazıyordu.
+            # Bu dosyayı bir kez okuyup yeni yapıya otomatik taşır.
+            if (
+                "current_route" in legacy_state
+                and "initial_evaluation" in legacy_state
+            ):
+                state = legacy_state
+                save_state(state)
+            else:
+                raise FileNotFoundError(
+                    "Resume için checkpoint bulunamadı: "
+                    f"{CHECKPOINT_PATH}"
+                )
+        else:
+            raise FileNotFoundError(
+                "Devam edilecek deney dosyası bulunamadı."
+            )
 
         previous_model = state.get("model_requested")
 
@@ -394,8 +531,28 @@ def main() -> None:
 
     load_dotenv(PROJECT_ROOT / ".env")
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
     model = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
+
+    state = load_or_create_state(
+        model=model,
+        iterations=args.iterations,
+        resume=args.resume,
+    )
+
+    completed_iterations = state["completed_iterations"]
+
+    if completed_iterations >= args.iterations:
+        # Tamamlanmış eski sonucu sade formata taşımak için
+        # API anahtarı, görsel veya yeni API çağrısı gerekmez.
+        save_state(state)
+        print(
+            "İstenen iterasyon sayısı zaten tamamlanmış."
+        )
+        print(f"Sade sonuç dosyası: {SUMMARY_OUTPUT_PATH}")
+        print(f"Checkpoint dosyası: {CHECKPOINT_PATH}")
+        return
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
 
     if not api_key:
         raise ValueError(
@@ -409,21 +566,6 @@ def main() -> None:
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
     )
-
-    state = load_or_create_state(
-        model=model,
-        iterations=args.iterations,
-        resume=args.resume,
-    )
-
-    completed_iterations = state["completed_iterations"]
-
-    if completed_iterations >= args.iterations:
-        print(
-            "İstenen iterasyon sayısı zaten tamamlanmış."
-        )
-        print(f"Sonuç dosyası: {OUTPUT_PATH}")
-        return
 
     print(f"Model              : {model}")
     print("Problem            : eil51")
@@ -484,17 +626,28 @@ def main() -> None:
                     "optimality_gap": None,
                 }
 
-        except RuntimeError as exc:
-            # OpenRouter boş/eksik completion döndürürse deneyi çökertme.
+        except Exception as exc:
+            # Başarısız critic çağrısını tamamlanmış iterasyon sayma.
+            # Çağrı sayısını ve hatayı checkpoint'e kaydedip aynı
+            # iterasyonun --resume ile yeniden denenmesine izin ver.
             critic_call_error = str(exc)
-            candidate_parse_error = critic_call_error
-            candidate_evaluation = {
-                "route": None,
-                "valid": False,
-                "distance": None,
-                "known_optimum": 426,
-                "optimality_gap": None,
+            state["last_error"] = {
+                "iteration": iteration,
+                "agent": "critic",
+                "message": critic_call_error,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             }
+            state["timestamp_updated_utc"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+            save_state(state)
+            raise RuntimeError(
+                f"Critic çağrısı başarısız oldu: {critic_call_error}\n"
+                "Aynı iterasyonu --resume ile yeniden deneyebilirsin."
+            ) from exc
+
+        # Önceki geçici hata kaydını başarılı critic çağrısından sonra temizle.
+        state.pop("last_error", None)
 
         print(f"Aday geçerli : {candidate_evaluation['valid']}")
         print(f"Aday mesafe  : {candidate_evaluation['distance']}")
@@ -540,7 +693,7 @@ def main() -> None:
                     scorer_raw
                 )
 
-            except (RuntimeError, ValueError) as exc:
+            except Exception as exc:
                 scorer_parse_error = str(exc)
 
                 # Scorer yanıtı kullanılamazsa kesin TSPLIB
@@ -648,7 +801,8 @@ def main() -> None:
         f"Son gap (%)        : "
         f"{state['current_evaluation']['optimality_gap']}"
     )
-    print(f"Sonuç dosyası      : {OUTPUT_PATH}")
+    print(f"Sade sonuç dosyası : {SUMMARY_OUTPUT_PATH}")
+    print(f"Checkpoint dosyası : {CHECKPOINT_PATH}")
 
 
 if __name__ == "__main__":
