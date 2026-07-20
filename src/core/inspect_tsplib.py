@@ -3,7 +3,7 @@ from pathlib import Path
 import tsplib95
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "tsplib"
 
 PROBLEM_PATH = DATA_DIR / "eil51.tsp"

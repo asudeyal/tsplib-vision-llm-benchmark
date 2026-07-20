@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 import tsplib95
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROBLEM_PATH = PROJECT_ROOT / "data" / "tsplib" / "eil51.tsp"
-OUTPUT_DIR = PROJECT_ROOT / "output"
+OUTPUT_DIR = PROJECT_ROOT / "output" / "figures"
 OUTPUT_PATH = OUTPUT_DIR / "eil51_nodes.png"
 
 

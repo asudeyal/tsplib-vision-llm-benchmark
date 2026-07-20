@@ -4,7 +4,7 @@ from typing import Sequence
 import tsplib95
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROBLEM_PATH = PROJECT_ROOT / "data" / "tsplib" / "eil51.tsp"
 
 KNOWN_OPTIMUM = 426

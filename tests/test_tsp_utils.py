@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import tsplib95
 
-from src.tsp_utils import (
+from src.core.tsp_utils import (
     KNOWN_OPTIMUM,
     calculate_optimality_gap,
     calculate_route_distance,

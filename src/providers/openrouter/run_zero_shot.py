@@ -9,12 +9,22 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.tsp_utils import evaluate_route, load_eil51_problem
+from src.core.tsp_utils import evaluate_route, load_eil51_problem
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-IMAGE_PATH = PROJECT_ROOT / "output" / "eil51_nodes.png"
-OUTPUT_PATH = PROJECT_ROOT / "output" / "openrouter_zero_shot_eil51.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+IMAGE_PATH = (
+    PROJECT_ROOT / "output" / "figures" / "eil51_nodes.png"
+)
+OUTPUT_PATH = (
+    PROJECT_ROOT
+    / "output"
+    / "results"
+    / "openrouter"
+    / "zero_shot"
+    / "openrouter_zero_shot_eil51.json"
+)
 
 DEFAULT_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
 

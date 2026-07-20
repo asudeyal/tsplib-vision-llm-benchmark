@@ -7,17 +7,27 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.run_openrouter_zero_shot import (
+from src.providers.openrouter.run_zero_shot import (
     encode_image,
     extract_route,
     get_usage_data,
 )
-from src.tsp_utils import evaluate_route, load_eil51_problem
+from src.core.tsp_utils import evaluate_route, load_eil51_problem
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-IMAGE_PATH = PROJECT_ROOT / "output" / "eil51_nodes.png"
-OUTPUT_PATH = PROJECT_ROOT / "output" / "groq_zero_shot_eil51.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+IMAGE_PATH = (
+    PROJECT_ROOT / "output" / "figures" / "eil51_nodes.png"
+)
+OUTPUT_PATH = (
+    PROJECT_ROOT
+    / "output"
+    / "results"
+    / "groq"
+    / "zero_shot"
+    / "groq_zero_shot_eil51.json"
+)
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
 MAX_BASE64_SIZE = 4 * 1024 * 1024

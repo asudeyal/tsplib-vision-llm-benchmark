@@ -12,28 +12,36 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from src.run_openrouter_zero_shot import (
+from src.providers.openrouter.run_zero_shot import (
     encode_image,
     extract_json_object,
     extract_route,
     get_usage_data,
 )
-from src.tsp_utils import evaluate_route, load_eil51_problem
+from src.core.tsp_utils import evaluate_route, load_eil51_problem
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-IMAGE_PATH = PROJECT_ROOT / "output" / "eil51_nodes.png"
+IMAGE_PATH = (
+    PROJECT_ROOT / "output" / "figures" / "eil51_nodes.png"
+)
 
 ZERO_SHOT_RESULT_PATH = (
     PROJECT_ROOT
     / "output"
+    / "results"
+    / "openrouter"
+    / "zero_shot"
     / "openrouter_zero_shot_eil51.json"
 )
 
 SUMMARY_OUTPUT_PATH = (
     PROJECT_ROOT
     / "output"
+    / "results"
+    / "openrouter"
+    / "multi_agent"
     / "openrouter_multi_agent_eil51.json"
 )
 
@@ -41,6 +49,7 @@ CHECKPOINT_PATH = (
     PROJECT_ROOT
     / "output"
     / "checkpoints"
+    / "openrouter"
     / "openrouter_multi_agent_eil51_checkpoint.json"
 )
 

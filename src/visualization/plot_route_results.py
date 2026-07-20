@@ -7,7 +7,7 @@ from typing import Sequence
 import matplotlib.pyplot as plt
 import tsplib95
 
-from src.tsp_utils import (
+from src.core.tsp_utils import (
     KNOWN_OPTIMUM,
     calculate_optimality_gap,
     calculate_route_distance,
@@ -17,11 +17,14 @@ from src.tsp_utils import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 RESULT_PATH = (
     PROJECT_ROOT
     / "output"
+    / "results"
+    / "openrouter"
+    / "zero_shot"
     / "openrouter_zero_shot_eil51.json"
 )
 
@@ -35,12 +38,14 @@ OPTIMAL_TOUR_PATH = (
 MODEL_ROUTE_OUTPUT = (
     PROJECT_ROOT
     / "output"
+    / "figures"
     / "eil51_openrouter_zero_shot_route.png"
 )
 
 OPTIMAL_ROUTE_OUTPUT = (
     PROJECT_ROOT
     / "output"
+    / "figures"
     / "eil51_optimal_route.png"
 )
 
