@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.idea/
+.vscode/
+.pytest_cache/
+
+# Ham deney çıktıları, checkpoint'ler ve arşivler yerelde tutulur.
+output/*
+
+# Klasör iskeleti
+!output/.gitkeep
+
+# GitHub README'de kullanılacak seçilmiş sonuçlar
+!output/figures/
+output/figures/*
+!output/figures/eil51_method_comparison.png
+!output/figures/eil51_groq_route_after_two_opt.png
+
+!output/results/
+output/results/*
+!output/results/summary/
+output/results/summary/*
+!output/results/summary/eil51_comparison.json
+!output/results/summary/eil51_comparison.csv
