@@ -16,8 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 IMAGE_PATH = PROJECT_ROOT / "output" / "eil51_nodes.png"
 OUTPUT_PATH = PROJECT_ROOT / "output" / "openrouter_zero_shot_eil51.json"
 
-DEFAULT_MODEL = "qwen/qwen2.5-vl-32b-instruct:free"
-
+DEFAULT_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
 
 def encode_image(image_path: Path) -> str:
     """Yerel PNG dosyasını base64 metnine dönüştürür."""

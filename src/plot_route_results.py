@@ -1,4 +1,6 @@
+# VERSION: 2.0 - handles invalid model routes without crashing
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Sequence
 
@@ -89,13 +91,46 @@ def load_optimal_route() -> list[int]:
     return list(tour_problem.tours[0])
 
 
+def route_diagnostics(route: Sequence[int]) -> dict:
+    """Geçersiz bir rotadaki eksik ve tekrar eden düğümleri bulur."""
+    route_list = list(route)
+    route_without_return = route_list.copy()
+
+    if (
+        len(route_without_return) >= 2
+        and route_without_return[0] == route_without_return[-1]
+    ):
+        route_without_return = route_without_return[:-1]
+
+    expected_nodes = set(range(1, 52))
+    counts = Counter(route_without_return)
+
+    return {
+        "route_length": len(route_list),
+        "expected_route_length": 52,
+        "missing_nodes": sorted(
+            expected_nodes - set(route_without_return)
+        ),
+        "duplicate_nodes": sorted(
+            node for node, count in counts.items() if count > 1
+        ),
+        "unexpected_nodes": sorted(
+            set(route_without_return) - expected_nodes
+        ),
+        "starts_at_1": bool(route_list) and route_list[0] == 1,
+        "returns_to_1": (
+            len(route_list) >= 2 and route_list[-1] == 1
+        ),
+    }
+
+
 def plot_route(
     problem,
     route: Sequence[int],
     output_path: Path,
     title: str,
 ) -> None:
-    """Verilen eil51 rotasını PNG dosyasına çizer."""
+    """Verilen geçerli eil51 rotasını PNG dosyasına çizer."""
     nodes = list(problem.get_nodes())
     normalized_route = normalize_route(route, nodes)
 
@@ -116,18 +151,11 @@ def plot_route(
     ]
 
     node_ids = sorted(coordinates)
-    node_x = [
-        coordinates[node_id][0]
-        for node_id in node_ids
-    ]
-    node_y = [
-        coordinates[node_id][1]
-        for node_id in node_ids
-    ]
+    node_x = [coordinates[node_id][0] for node_id in node_ids]
+    node_y = [coordinates[node_id][1] for node_id in node_ids]
 
     fig, ax = plt.subplots(figsize=(12, 12))
 
-    # Tur sırasına göre kenarları çiz.
     ax.plot(
         route_x,
         route_y,
@@ -136,7 +164,6 @@ def plot_route(
         zorder=1,
     )
 
-    # Bütün düğümleri çiz.
     ax.scatter(
         node_x,
         node_y,
@@ -146,9 +173,7 @@ def plot_route(
         zorder=2,
     )
 
-    # Başlangıç düğümünü belirginleştir.
     start_x, start_y = coordinates[1]
-
     ax.scatter(
         [start_x],
         [start_y],
@@ -162,7 +187,6 @@ def plot_route(
 
     for node_id in node_ids:
         x, y = coordinates[node_id]
-
         ax.annotate(
             str(node_id),
             (x, y),
@@ -181,49 +205,67 @@ def plot_route(
     ax.legend()
 
     fig.tight_layout()
-
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    fig.savefig(
-        output_path,
-        dpi=300,
-        bbox_inches="tight",
-    )
-
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def main() -> None:
     problem = load_eil51_problem()
-
     model_route = load_model_route()
     optimal_route = load_optimal_route()
+    nodes = list(problem.get_nodes())
 
-    model_distance = calculate_route_distance(
-        problem,
-        model_route,
-    )
+    model_route_valid = validate_route(model_route, nodes)
+
+    if model_route_valid:
+        model_distance = calculate_route_distance(
+            problem,
+            model_route,
+        )
+        model_gap = calculate_optimality_gap(
+            model_distance,
+            KNOWN_OPTIMUM,
+        )
+
+        plot_route(
+            problem=problem,
+            route=model_route,
+            output_path=MODEL_ROUTE_OUTPUT,
+            title=(
+                "eil51 — OpenRouter Zero-Shot Rotası\n"
+                f"Mesafe: {model_distance} | Gap: %{model_gap:.2f}"
+            ),
+        )
+
+        print("Model rotası:")
+        print("Geçerli : True")
+        print(f"Mesafe  : {model_distance}")
+        print(f"Gap     : %{model_gap:.2f}")
+        print(f"Görsel  : {MODEL_ROUTE_OUTPUT}")
+
+    else:
+        diagnostics = route_diagnostics(model_route)
+
+        # Önceki modele ait geçerli rota görselinin yanlışlıkla
+        # güncel sonuç sanılmasını önle.
+        if MODEL_ROUTE_OUTPUT.exists():
+            MODEL_ROUTE_OUTPUT.unlink()
+
+        print("Model rotası:")
+        print("Geçerli : False")
+        print(
+            f"Uzunluk : {diagnostics['route_length']} "
+            f"(beklenen {diagnostics['expected_route_length']})"
+        )
+        print(f"Eksik   : {diagnostics['missing_nodes']}")
+        print(f"Tekrar  : {diagnostics['duplicate_nodes']}")
+        print(f"Fazladan: {diagnostics['unexpected_nodes']}")
+        print("Model rota görseli oluşturulmadı.")
+
     optimal_distance = calculate_route_distance(
         problem,
         optimal_route,
-    )
-
-    model_gap = calculate_optimality_gap(
-        model_distance,
-        KNOWN_OPTIMUM,
-    )
-
-    plot_route(
-        problem=problem,
-        route=model_route,
-        output_path=MODEL_ROUTE_OUTPUT,
-        title=(
-            "eil51 — OpenRouter Nemotron Zero-Shot Rotası\n"
-            f"Mesafe: {model_distance} | Gap: %{model_gap:.2f}"
-        ),
     )
 
     plot_route(
@@ -236,16 +278,10 @@ def main() -> None:
         ),
     )
 
-    print("Model rotası:")
-    print(f"Mesafe : {model_distance}")
-    print(f"Gap    : %{model_gap:.2f}")
-    print(f"Görsel : {MODEL_ROUTE_OUTPUT}")
-
     print("\nOptimum rota:")
     print(f"Mesafe : {optimal_distance}")
     print(f"Görsel : {OPTIMAL_ROUTE_OUTPUT}")
-
-    print("\nRota görselleri başarıyla oluşturuldu.")
+    print("\nRota sonucu kontrolü tamamlandı.")
 
 
 if __name__ == "__main__":

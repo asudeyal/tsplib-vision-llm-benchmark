@@ -1,5 +1,7 @@
+# VERSION: 3.0 - supports invalid zero-shot routes and validation repair
 # VERSION: 2.0 - separate readable summary and detailed checkpoint
 import argparse
+from collections import Counter
 import json
 import os
 import time
@@ -107,12 +109,86 @@ def load_zero_shot_route() -> list[int]:
     return route
 
 
+def route_diagnostics(route: list[int]) -> dict[str, Any]:
+    """Rotadaki eksik, tekrar eden ve beklenmeyen düğümleri bulur."""
+    expected_nodes = set(range(1, 52))
+    route_without_return = list(route)
+
+    if (
+        len(route_without_return) >= 2
+        and route_without_return[0] == route_without_return[-1]
+    ):
+        route_without_return = route_without_return[:-1]
+
+    counts = Counter(route_without_return)
+
+    return {
+        "route_length": len(route),
+        "expected_route_length": 52,
+        "missing_nodes": sorted(
+            expected_nodes - set(route_without_return)
+        ),
+        "duplicate_nodes": sorted(
+            node for node, count in counts.items() if count > 1
+        ),
+        "unexpected_nodes": sorted(
+            set(route_without_return) - expected_nodes
+        ),
+        "starts_at_1": bool(route) and route[0] == 1,
+        "returns_to_1": (
+            len(route) >= 2 and route[-1] == 1
+        ),
+    }
+
+
+def compact_route_issues(route: list[int]) -> dict[str, Any]:
+    """Sade sonuç dosyası için yalnızca önemli rota sorunlarını döndürür."""
+    details = route_diagnostics(route)
+    return {
+        "missing_nodes": details["missing_nodes"],
+        "duplicate_nodes": details["duplicate_nodes"],
+        "unexpected_nodes": details["unexpected_nodes"],
+        "route_length": details["route_length"],
+        "expected_route_length": details["expected_route_length"],
+    }
+
+
+def deterministic_choice(
+    current_evaluation: dict[str, Any],
+    candidate_evaluation: dict[str, Any],
+) -> str:
+    """Scorer kullanılamazsa geçerlilik ve mesafeye göre seçim yapar."""
+    current_valid = bool(current_evaluation.get("valid"))
+    candidate_valid = bool(candidate_evaluation.get("valid"))
+
+    if candidate_valid and not current_valid:
+        return "candidate"
+
+    if current_valid and not candidate_valid:
+        return "current"
+
+    if current_valid and candidate_valid:
+        current_distance = current_evaluation.get("distance")
+        candidate_distance = candidate_evaluation.get("distance")
+
+        if (
+            current_distance is not None
+            and candidate_distance is not None
+            and candidate_distance < current_distance
+        ):
+            return "candidate"
+
+    return "current"
+
+
 def build_critic_prompt(
     current_route: list[int],
     current_evaluation: dict[str, Any],
     iteration: int,
 ) -> str:
     """Critic ajanı için görsel rota iyileştirme promptu üretir."""
+    diagnostics = route_diagnostics(current_route)
+
     return f"""
 You are the critic agent in iteration {iteration} of a TSP optimization process.
 
@@ -126,9 +202,14 @@ Current route information:
 - Exact TSPLIB distance: {current_evaluation["distance"]}
 - Known optimum: {current_evaluation["known_optimum"]}
 - Optimality gap: {current_evaluation["optimality_gap"]}
+- Route length: {diagnostics["route_length"]} (expected: 52)
+- Missing nodes: {diagnostics["missing_nodes"]}
+- Duplicate nodes: {diagnostics["duplicate_nodes"]}
+- Unexpected nodes: {diagnostics["unexpected_nodes"]}
 
-Analyze the spatial positions of the nodes in the image and produce exactly
-one improved route.
+If the current route is invalid, your first priority is to repair every
+validation error. Then use the image to improve route quality.
+Analyze the spatial positions of the nodes and produce exactly one route.
 
 Requirements:
 - Start at node 1.
@@ -346,6 +427,13 @@ def build_summary(state: dict[str, Any]) -> dict[str, Any]:
                 "gap_percent": round_optional(
                     candidate_evaluation.get("optimality_gap")
                 ),
+                **(
+                    {"issues": compact_route_issues(
+                        item["critic"].get("parsed_route") or []
+                    )}
+                    if not candidate_evaluation.get("valid")
+                    else {}
+                ),
             },
             "scorer": (
                 "skipped"
@@ -391,6 +479,11 @@ def build_summary(state: dict[str, Any]) -> dict[str, Any]:
             "gap_percent": round_optional(
                 initial_evaluation.get("optimality_gap")
             ),
+            **(
+                {"issues": compact_route_issues(state["initial_route"])}
+                if not initial_evaluation.get("valid")
+                else {}
+            ),
         },
         "steps": steps,
         "final": {
@@ -401,6 +494,11 @@ def build_summary(state: dict[str, Any]) -> dict[str, Any]:
             ),
             "distance_improvement": total_improvement,
             "route": state["current_route"],
+            **(
+                {"issues": compact_route_issues(state["current_route"])}
+                if not final_evaluation.get("valid")
+                else {}
+            ),
         },
         "started_at_utc": state.get("timestamp_started_utc"),
         "updated_at_utc": state.get("timestamp_updated_utc"),
@@ -441,9 +539,13 @@ def create_initial_state(
     initial_evaluation = evaluate_route(problem, initial_route)
 
     if not initial_evaluation["valid"]:
-        raise ValueError(
-            "Zero-shot başlangıç rotası geçerli değil."
+        diagnostics = route_diagnostics(initial_route)
+        print(
+            "Uyarı: Zero-shot başlangıç rotası geçersiz. "
+            "Critic rotayı onarmaya çalışacak."
         )
+        print(f"Eksik düğümler : {diagnostics['missing_nodes']}")
+        print(f"Tekrarlar      : {diagnostics['duplicate_nodes']}")
 
     return {
         "experiment": "openrouter_multi_agent_critic_scorer",
@@ -698,13 +800,10 @@ def main() -> None:
 
                 # Scorer yanıtı kullanılamazsa kesin TSPLIB
                 # mesafelerine göre deterministik seçim yap.
-                if (
-                    candidate_evaluation["distance"]
-                    < current_evaluation["distance"]
-                ):
-                    scorer_choice = "candidate"
-                else:
-                    scorer_choice = "current"
+                scorer_choice = deterministic_choice(
+                    current_evaluation=current_evaluation,
+                    candidate_evaluation=candidate_evaluation,
+                )
 
                 print(
                     "Scorer yanıtı kullanılamadı; "
@@ -712,11 +811,19 @@ def main() -> None:
                 )
                 print(f"Scorer hatası: {scorer_parse_error}")
 
-        # Geçersiz adayın seçilmesine izin verme.
-        if (
-            scorer_choice == "candidate"
-            and candidate_evaluation["valid"]
-        ):
+        # Geçerli rota, geçersiz rotaya karşı her zaman korunur.
+        current_valid = bool(current_evaluation.get("valid"))
+        candidate_valid = bool(candidate_evaluation.get("valid"))
+
+        if candidate_valid and not current_valid:
+            accepted_route = candidate_route
+            accepted_evaluation = candidate_evaluation
+            accepted_choice = "candidate"
+        elif current_valid and not candidate_valid:
+            accepted_route = current_route
+            accepted_evaluation = current_evaluation
+            accepted_choice = "current"
+        elif scorer_choice == "candidate" and candidate_valid:
             accepted_route = candidate_route
             accepted_evaluation = candidate_evaluation
             accepted_choice = "candidate"
